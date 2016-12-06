@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -12,10 +14,17 @@ import (
 )
 
 type exporterClass struct {
-	metrics  []*prometheus.GaugeVec
-	counter  prometheus.Counter
-	replacer *strings.Replacer
-	hostname string
+	metrics       []*prometheus.GaugeVec
+	counter       prometheus.Counter
+	replacer      *strings.Replacer
+	hostname      string
+	poolGatherers map[string]*poolGathererClass
+}
+
+type poolGathererClass struct {
+	poolName        string
+	lastKnownMaster string
+	xenClients      map[string]*xenAPI.Client
 }
 
 func newExporter() *exporterClass {
@@ -25,6 +34,7 @@ func newExporter() *exporterClass {
 	if err != nil {
 		log.Fatalf("os.Hostname(): %s", err.Error())
 	}
+	e.poolGatherers = make(map[string]*poolGathererClass)
 	lastUpdatedMetric := newMetric("last_updated",
 		map[string]string{"host": e.hostname},
 		0)
@@ -48,6 +58,14 @@ func (e *exporterClass) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
+func (e *exporterClass) newGatherer(pool string) {
+	log.Printf("Instantiating gatherer for %s\n", pool)
+	gatherer := &poolGathererClass{}
+	gatherer.poolName = pool
+	gatherer.xenClients = make(map[string]*xenAPI.Client)
+	e.poolGatherers[pool] = gatherer
+}
+
 func (e *exporterClass) gatherData() {
 	log.Printf("Starting gather job for all pools")
 	timeStarted := time.Now().Unix()
@@ -57,7 +75,11 @@ func (e *exporterClass) gatherData() {
 
 	// launch a separate go routine for each pool
 	for pool := range config.Pools {
-		go gatherPoolData(pool, retCh)
+		var ok bool
+		if _, ok = e.poolGatherers[pool]; !ok {
+			e.newGatherer(pool)
+		}
+		go e.poolGatherers[pool].gather(retCh)
 	}
 
 	// create an array in which to gather results
@@ -67,7 +89,6 @@ func (e *exporterClass) gatherData() {
 		// wait for results from one of the gather routines
 		metricList := <-retCh
 		retLists = append(retLists, metricList)
-
 		// break if we have results back for all the routines
 		if len(retLists) == len(config.Pools) {
 			break
@@ -95,7 +116,8 @@ func (e *exporterClass) gatherData() {
 	e.metrics = newMetrics
 }
 
-func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
+func (g *poolGathererClass) gather(retCh chan []*prometheus.GaugeVec) {
+
 	var metricList []*prometheus.GaugeVec
 	var defaultSRList []xenAPI.SRRef
 
@@ -103,50 +125,49 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 
 	timeStarted := time.Now().Unix()
 
-	xenClient, session, err := getXenClient(pool)
+	xenClient, session, err := g.getXenClient()
 	if err != nil {
-		log.Printf("Error getting XAPI client for %s: %s\n", pool, err.Error())
+		log.Printf("Error getting XAPI client for %s: %s\n", g.poolName, err.Error())
 		return
 	}
-	defer xenClient.Close()
 
 	timeConnected := time.Now().Unix()
 	log.Printf("gatherPoolData(): %s: session established in %d seconds\n",
-		pool, timeConnected-timeStarted)
+		g.poolName, timeConnected-timeStarted)
 
 	poolRecs, err := xenClient.Pool.GetAllRecords(session)
 	if err != nil {
-		log.Printf("Error getting pool records for %s: %s", pool, err.Error())
+		log.Printf("Error getting pool records for %s: %s", g.poolName, err.Error())
 		return
 	}
 
 	hostRecs, err := xenClient.Host.GetAllRecords(session)
 	if err != nil {
-		log.Printf("Error getting host records for %s: %s\n", pool, err.Error())
+		log.Printf("Error getting host records for %s: %s\n", g.poolName, err.Error())
 		return
 	}
 
 	vmRecs, err := xenClient.VM.GetAllRecords(session)
 	if err != nil {
-		log.Printf("Error getting vm records for %s: %s\n", pool, err.Error())
+		log.Printf("Error getting vm records for %s: %s\n", g.poolName, err.Error())
 		return
 	}
 
 	vmMetricsRecs, err := xenClient.VMMetrics.GetAllRecords(session)
 	if err != nil {
-		log.Printf("Error getting vm metrics records for %s: %s\n", pool, err.Error())
+		log.Printf("Error getting vm metrics records for %s: %s\n", g.poolName, err.Error())
 		return
 	}
 
 	hostMetricsRecs, err := xenClient.HostMetrics.GetAllRecords(session)
 	if err != nil {
-		log.Printf("Error getting host metrics records for %s: %s\n", pool, err.Error())
+		log.Printf("Error getting host metrics records for %s: %s\n", g.poolName, err.Error())
 		return
 	}
 
 	srRecs, err := xenClient.SR.GetAllRecords(session)
 	if err != nil {
-		log.Printf("Error getting sr records for %s: %s", pool, err.Error())
+		log.Printf("Error getting sr records for %s: %s", g.poolName, err.Error())
 		return
 	}
 
@@ -282,7 +303,7 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 			defaultStorageMetric := newMetric("default_storage",
 				map[string]string{
 					"uuid":       srRec.UUID,
-					"pool":       pool,
+					"pool":       g.poolName,
 					"type":       srRec.Type,
 					"name_label": srRec.NameLabel,
 				}, boolFloat(defaultSR))
@@ -294,7 +315,7 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 			physicalSizeMetric := newMetric("physical_size",
 				map[string]string{
 					"uuid":       srRec.UUID,
-					"pool":       pool,
+					"pool":       g.poolName,
 					"type":       srRec.Type,
 					"name_label": srRec.NameLabel,
 				}, float64(srRec.PhysicalSize))
@@ -306,7 +327,7 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 			physicalUtilisationMetric := newMetric("physical_utilisation",
 				map[string]string{
 					"uuid":       srRec.UUID,
-					"pool":       pool,
+					"pool":       g.poolName,
 					"type":       srRec.Type,
 					"name_label": srRec.NameLabel,
 				}, float64(srRec.PhysicalUtilisation))
@@ -318,7 +339,7 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 			physicalPctAllocatedMetric := newMetric("physical_pct_allocated",
 				map[string]string{
 					"uuid":       srRec.UUID,
-					"pool":       pool,
+					"pool":       g.poolName,
 					"type":       srRec.Type,
 					"name_label": srRec.NameLabel,
 				}, float64(srRec.PhysicalUtilisation)*100/float64(srRec.PhysicalSize))
@@ -330,7 +351,7 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 			virtualAllocationMetric := newMetric("virtual_allocation",
 				map[string]string{
 					"uuid":       srRec.UUID,
-					"pool":       pool,
+					"pool":       g.poolName,
 					"type":       srRec.Type,
 					"name_label": srRec.NameLabel,
 				}, float64(srRec.VirtualAllocation))
@@ -341,6 +362,94 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 
 	timeGenerated := time.Now().Unix()
 	log.Printf("gatherPoolData(): %s: gather time %d seconds\n",
-		pool, timeGenerated-timeStarted)
+		g.poolName, timeGenerated-timeStarted)
 
+}
+
+func (g *poolGathererClass) getXenClient() (
+	xenClient *xenAPI.Client, session xenAPI.SessionRef, err error) {
+	var hostList = config.Pools[g.poolName]
+
+	// if a lastKnownMaster exists in our host list, bump it to the top
+	if len(g.lastKnownMaster) != 0 {
+		var newHostList = []string{g.lastKnownMaster}
+
+		for key, host := range hostList {
+			if host == g.lastKnownMaster {
+				hostList = append(hostList[:key], hostList[key+1:]...)
+				break
+			}
+			var ips []net.IP
+			ips, err = net.LookupIP(host)
+			if err != nil {
+				ipMatch := false
+				for _, ip := range ips {
+					if g.lastKnownMaster == ip.String() {
+						hostList = append(hostList[:key], hostList[key+1:]...)
+						ipMatch = true
+						break
+					}
+				}
+				if ipMatch {
+					break
+				}
+			}
+		}
+		hostList = newHostList
+	}
+
+	for _, host := range hostList {
+		xenClient, session, err = g.tryXenClient(host)
+		if err == nil {
+			return xenClient, session, nil
+		}
+		log.Printf("tryXenClient(): %s: %s\n", host, err.Error())
+	}
+
+	return nil, "", fmt.Errorf(
+		"%s: unable to authenticate into a master host", g.poolName)
+}
+
+func (g *poolGathererClass) tryXenClient(host string) (
+	xenClient *xenAPI.Client, session xenAPI.SessionRef, err error) {
+
+	var ok bool
+	if xenClient, ok = g.xenClients[host]; !ok {
+		log.Printf("Instantiating xenAPI.Client for %s\n", host)
+		// no xapi client exists for this host, create a new one
+		xenClient, err = xenAPI.NewClient("https://"+host, nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("NewClient(): %s: %s\n", host, err.Error())
+		}
+	}
+
+	sessionCh := make(chan xenAPI.SessionRef)
+	errCh := make(chan error)
+	go func() {
+		session, err = xenClient.Session.LoginWithPassword(
+			config.Auth.Username, config.Auth.Password,
+			"1.0", "xapi_exporter")
+		if err != nil {
+			errCh <- err
+		} else {
+			sessionCh <- session
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		errParts := strings.Split(err.Error(), " ")
+		if errParts[2] == "HOST_IS_SLAVE" {
+			return g.tryXenClient(errParts[3])
+		}
+		return nil, "", fmt.Errorf(
+			"LoginWithPassword(): %s: %s\n", host, err.Error())
+	case <-time.After(time.Second * config.TimeoutLogin):
+		return nil, "", fmt.Errorf(
+			"LoginWithPassword(): timeout after %d seconds", config.TimeoutLogin)
+	case session = <-sessionCh:
+	}
+	g.xenClients[host] = xenClient
+	g.lastKnownMaster = host
+	return
 }
