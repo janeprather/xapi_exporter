@@ -5,6 +5,7 @@ import "github.com/prometheus/client_golang/prometheus"
 var metricHelp = map[string]string{
 	// special metric for prometheus exporter overhead
 	"last_updated": "seconds since epoch of last stats collection",
+	"gather_time":  "duration of last gathering run, in seconds",
 
 	// xapi derived metrics
 	"cpu_count":         "the number of physical CPUs on the host",

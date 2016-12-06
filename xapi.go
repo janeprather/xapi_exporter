@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	xenAPI "github.com/janeprather/go-xen-api-client"
 )
@@ -31,18 +32,32 @@ func tryXenClient(host string) (
 		return nil, "", fmt.Errorf("NewClient(): %s: %s\n", host, err.Error())
 	}
 
-	session, err = xenClient.Session.LoginWithPassword(
-		config.Auth.Username, config.Auth.Password,
-		"1.0", "xapi_exporter")
+	sessionCh := make(chan xenAPI.SessionRef)
+	errCh := make(chan error)
+	go func() {
+		session, err = xenClient.Session.LoginWithPassword(
+			config.Auth.Username, config.Auth.Password,
+			"1.0", "xapi_exporter")
+		if err != nil {
+			errCh <- err
+		} else {
+			sessionCh <- session
+		}
+	}()
 
-	if err != nil {
-		// detect/handle HOST_IS_SLAVE login error
+	select {
+	case err := <-errCh:
 		errParts := strings.Split(err.Error(), " ")
-
 		if errParts[2] == "HOST_IS_SLAVE" {
 			return tryXenClient(errParts[3])
 		}
-		return nil, "", fmt.Errorf("LoginWithPassword(): %s: %s\n", host, err.Error())
+		return nil, "", fmt.Errorf(
+			"LoginWithPassword(): %s: %s\n", host, err.Error())
+	case <-time.After(time.Second * config.TimeoutLogin):
+		return nil, "", fmt.Errorf(
+			"LoginWithPassword(): timeout after %d seconds", config.TimeoutLogin)
+	case session = <-sessionCh:
 	}
+
 	return
 }

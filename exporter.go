@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	xenAPI "github.com/janeprather/go-xen-api-client"
 	"github.com/prometheus/client_golang/prometheus"
@@ -48,6 +49,8 @@ func (e *exporterClass) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (e *exporterClass) gatherData() {
+	log.Printf("Starting gather job for all pools")
+	timeStarted := time.Now().Unix()
 
 	// create a channel to collect data from other routines
 	retCh := make(chan []*prometheus.GaugeVec)
@@ -78,10 +81,17 @@ func (e *exporterClass) gatherData() {
 		}
 	}
 
+	timeFinished := time.Now().Unix()
 	lastUpdatedMetric := newMetric("last_updated",
 		map[string]string{"host": e.hostname},
-		0)
+		float64(timeFinished))
 	newMetrics = append(newMetrics, lastUpdatedMetric)
+	gatherTimeMetric := newMetric("gather_time",
+		map[string]string{"host": e.hostname},
+		float64(timeFinished-timeStarted))
+	newMetrics = append(newMetrics, gatherTimeMetric)
+	log.Printf("Completed gather job for all pools in %d seconds\n",
+		timeFinished-timeStarted)
 	e.metrics = newMetrics
 }
 
@@ -89,38 +99,54 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 	var metricList []*prometheus.GaugeVec
 	var defaultSRList []xenAPI.SRRef
 
+	defer func() { retCh <- metricList }()
+
+	timeStarted := time.Now().Unix()
+
 	xenClient, session, err := getXenClient(pool)
 	if err != nil {
 		log.Printf("Error getting XAPI client for %s: %s\n", pool, err.Error())
-		retCh <- metricList
+		return
+	}
+	defer xenClient.Close()
+
+	timeConnected := time.Now().Unix()
+	log.Printf("gatherPoolData(): %s: session established in %d seconds\n",
+		pool, timeConnected-timeStarted)
+
+	poolRecs, err := xenClient.Pool.GetAllRecords(session)
+	if err != nil {
+		log.Printf("Error getting pool records for %s: %s", pool, err.Error())
 		return
 	}
 
 	hostRecs, err := xenClient.Host.GetAllRecords(session)
 	if err != nil {
 		log.Printf("Error getting host records for %s: %s\n", pool, err.Error())
-		retCh <- metricList
 		return
 	}
 
 	vmRecs, err := xenClient.VM.GetAllRecords(session)
 	if err != nil {
 		log.Printf("Error getting vm records for %s: %s\n", pool, err.Error())
-		retCh <- metricList
 		return
 	}
 
 	vmMetricsRecs, err := xenClient.VMMetrics.GetAllRecords(session)
 	if err != nil {
 		log.Printf("Error getting vm metrics records for %s: %s\n", pool, err.Error())
-		retCh <- metricList
 		return
 	}
 
 	hostMetricsRecs, err := xenClient.HostMetrics.GetAllRecords(session)
 	if err != nil {
 		log.Printf("Error getting host metrics records for %s: %s\n", pool, err.Error())
-		retCh <- metricList
+		return
+	}
+
+	srRecs, err := xenClient.SR.GetAllRecords(session)
+	if err != nil {
+		log.Printf("Error getting sr records for %s: %s", pool, err.Error())
 		return
 	}
 
@@ -198,13 +224,6 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 		}
 	}
 
-	// fetch collection of pool records and, if successful, relevant metrics
-	poolRecs, err := xenClient.Pool.GetAllRecords(session)
-	if err != nil {
-		log.Printf("Error getting pool records for %s: %s", pool, err.Error())
-		retCh <- metricList
-		return
-	}
 	for _, poolRec := range poolRecs {
 		defaultSRList = append(defaultSRList, poolRec.DefaultSR)
 
@@ -248,13 +267,6 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 			metricList = append(metricList, wlbEnabledMetric)
 		}
 
-	}
-
-	srRecs, err := xenClient.SR.GetAllRecords(session)
-	if err != nil {
-		log.Printf("Error getting sr records for %s: %s", pool, err.Error())
-		retCh <- metricList
-		return
 	}
 
 	for srRef, srRec := range srRecs {
@@ -327,5 +339,8 @@ func gatherPoolData(pool string, retCh chan []*prometheus.GaugeVec) {
 
 	}
 
-	retCh <- metricList
+	timeGenerated := time.Now().Unix()
+	log.Printf("gatherPoolData(): %s: gather time %d seconds\n",
+		pool, timeGenerated-timeStarted)
+
 }

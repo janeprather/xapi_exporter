@@ -4,6 +4,7 @@ import (
 	"flag"
 	"io/ioutil"
 	"log"
+	"time"
 
 	yaml "gopkg.in/yaml.v2"
 )
@@ -21,6 +22,8 @@ type configClass struct {
 		Username string
 		Password string
 	}
+	TimeoutLogin time.Duration
+	TimeoutData  time.Duration
 }
 
 func initConfig() {
