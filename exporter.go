@@ -335,6 +335,11 @@ func (g *poolGathererClass) gather(retCh chan []*prometheus.GaugeVec) {
 		}
 
 		// set the physical_pct_allocated metric for the sr
+		physicalPctAllocated := float64(0)
+		if srRec.PhysicalSize > 0 {
+			physicalPctAllocated = float64(srRec.PhysicalUtilisation) * 100 /
+				float64(srRec.PhysicalSize)
+		}
 		if metricEnabled("physical_pct_allocated") {
 			physicalPctAllocatedMetric := newMetric("physical_pct_allocated",
 				map[string]string{
@@ -342,7 +347,7 @@ func (g *poolGathererClass) gather(retCh chan []*prometheus.GaugeVec) {
 					"pool":       g.poolName,
 					"type":       srRec.Type,
 					"name_label": srRec.NameLabel,
-				}, float64(srRec.PhysicalUtilisation)*100/float64(srRec.PhysicalSize))
+				}, physicalPctAllocated)
 			metricList = append(metricList, physicalPctAllocatedMetric)
 		}
 
