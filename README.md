@@ -18,6 +18,7 @@ YML config file should look something like:
 ```
 bindaddress: ":9290"
 namespace: "xenstats"
+timeoutlogin: 15
 
 pools:
   "xen-pool-a":
