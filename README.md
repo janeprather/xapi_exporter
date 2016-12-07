@@ -107,3 +107,25 @@ repository (in bytes). Note that for sparse disk formats, physical_utilisation
 may be less than virtual_allocation.
 
 **virtual_allocation**: sum of virtual_sizes of all VDIs in this SR (in bytes)
+
+## Docker
+
+A script exists to assist in generating a Docker container for xapi_exporter.
+
+```
+./build_container.sh xapi_exporter
+```
+
+* creates a build image to compile the go application
+* copies the static binary out of the build image
+* deletes the build image
+* creates a run image using the static binary
+
+The dual-image approach allows the final run image to be a tidy 35 MB in size.
+
+The final image expects to be provided with /xapi_exporter/config.yml at run
+time.
+
+```
+docker run -v /local/xapi_exporter:/xapi_exporter -p 9290:9290 -t xapi_exporter
+```

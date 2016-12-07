@@ -1,0 +1,9 @@
+FROM prom/busybox:glibc
+
+COPY ./xapi_exporter /bin/xapi_exporter
+
+EXPOSE 9290
+
+VOLUME ["/xapi_exporter"]
+
+CMD ["/bin/xapi_exporter", "-config", "/xapi_exporter/config.yml"]
