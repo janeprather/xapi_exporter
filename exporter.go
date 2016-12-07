@@ -425,7 +425,9 @@ func (g *poolGathererClass) tryXenClient(host string) (
 
 	sessionCh := make(chan xenAPI.SessionRef)
 	errCh := make(chan error)
-	go func() {
+	go func(xenClient *xenAPI.Client, sessionCh chan xenAPI.SessionRef,
+		errCh chan error) {
+
 		session, err = xenClient.Session.LoginWithPassword(
 			config.Auth.Username, config.Auth.Password,
 			"1.0", "xapi_exporter")
@@ -434,7 +436,7 @@ func (g *poolGathererClass) tryXenClient(host string) (
 		} else {
 			sessionCh <- session
 		}
-	}()
+	}(xenClient, sessionCh, errCh)
 
 	select {
 	case err := <-errCh:
