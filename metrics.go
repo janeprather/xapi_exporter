@@ -8,9 +8,9 @@ var metricHelp = map[string]string{
 	"gather_time":  "duration of last gathering run, in seconds",
 
 	// xapi derived metrics
-	"cpu_count":         "the number of physical CPUs on the host",
-	"cpu_pct_allocated": "percent vCPUs over total CPUs on this host",
-	"default_storage":   "true if SR is a default SR for a pool, otherwise false",
+	"cpu_count":       "the number of physical CPUs on the host",
+	"cpu_allocation":  "percent vCPUs over total CPUs on this host",
+	"default_storage": "true if SR is a default SR for a pool, otherwise false",
 	"ha_allow_overcommit": "If set to false then operations which would cause " +
 		"the Pool to become overcommitted will be blocked.",
 	"ha_enabled": "true if HA is enabled on the pool, false otherwise",
@@ -20,7 +20,7 @@ var metricHelp = map[string]string{
 		"i.e. if there exist insufficient physicalk resources to tolerate the " +
 		"configured number of host failures",
 	"memory_free":            "Free host memory (bytes)",
-	"memory_pct_allocated":   "percent used memory over total memory on this host",
+	"memory_allocation":      "percent used memory over total memory on this host",
 	"memory_total":           "Total host memory (bytes)",
 	"physical_pct_allocated": "percent of physical_utilisation over physical_size",
 	"physical_size":          "total physical size of the repository (in bytes)",
