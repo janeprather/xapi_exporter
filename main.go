@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -33,7 +34,7 @@ func main() {
 	prometheus.MustRegister(exporter)
 
 	// register the prometheus handler with http service
-	http.Handle(metricsPath, prometheus.Handler())
+	http.Handle(metricsPath, promhttp.Handler())
 
 	// unless the metricsPath is /, offer a minimal page with a link at /
 	if len(metricsPath) > 0 && metricsPath != "/" {
